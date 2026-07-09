@@ -59,14 +59,27 @@ curl "http://127.0.0.1:8000/route/?start=Los%20Angeles,%20CA&finish=New%20York,%
 curl "http://127.0.0.1:8000/route/?start=34.05,-118.24&finish=40.71,-74.01"
 ```
 
-Visual demo (Leaflet + OSM, fetches the endpoint and draws the route + stops):
-<http://127.0.0.1:8000/map/>
+Other endpoints:
 
-Run the tests:
+- `GET /` — human-readable API documentation (HTML).
+- `GET /api/` — machine-readable API spec (JSON).
+- `GET /map/` — Leaflet demo that fetches `/route/` and draws the route + stops.
+
+Run the unit tests:
 
 ```bash
 python manage.py test routing
 ```
+
+Smoke-test the live API (start `runserver` first, then in another terminal):
+
+```bash
+./test_api.sh                    # defaults to http://127.0.0.1:8000
+./test_api.sh http://host:port   # or point it elsewhere
+```
+
+It exercises success, single-tank, no-route (422), and bad-input (400) cases and
+exits non-zero on any failure.
 
 ---
 
@@ -124,11 +137,14 @@ routing/
     osrm.py            the single route call (lru-cached)
     geo.py             corridor filter + projection (NumPy)
     fuel.py            the greedy optimizer
-  views.py             thin orchestrator: parse → services → serialize
+  views.py             thin orchestrator: parse → services → serialize; docs + spec
   urls.py
-  templates/routing/map.html   Leaflet demo page
+  templates/routing/
+    map.html           Leaflet demo page
+    docs.html          HTML API documentation
   tests/               greedy-vs-brute-force + geometry + resolver + view
 data/uscities.csv      bundled geocode source (GeoNames US, offline)
+test_api.sh            live-server smoke test (curl-based)
 ```
 
 Splitting `services/` from the view keeps the view thin and every piece
