@@ -24,6 +24,23 @@ from routing.services.osrm import RouteError, RouteServiceError, get_route
 from routing.services.resolve import ResolveError, resolve
 
 
+# Default cap on polyline points returned to the client. Full geometry can be
+# tens of thousands of points (~800 KB); this keeps the payload small and map-
+# smooth. It is DISPLAY ONLY -- the fuel plan is always computed on full
+# geometry, so trimming here never changes the answer. ?geometry=full opts out.
+_DISPLAY_MAX_POINTS = 600
+
+
+def _downsample_for_display(coords, max_points=_DISPLAY_MAX_POINTS):
+    """Evenly thin the polyline to at most ``max_points`` points, keeping ends."""
+    n = len(coords)
+    if n <= max_points:
+        return coords
+    step = (n - 1) / (max_points - 1)
+    idx = sorted({round(i * step) for i in range(max_points)} | {0, n - 1})
+    return [coords[i] for i in idx]
+
+
 def _serialize_stop(s):
     """Map an internal stop dict to the public JSON shape.
 
@@ -57,7 +74,7 @@ def route_view(request):
     except ResolveError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
-    # 2. The single external call at request time: one OSRM route.
+    # 2. The single external call at request time: one OSRM route (full geometry).
     try:
         coords, distance_mi = get_route(start, finish)
     except RouteError as exc:
@@ -65,7 +82,8 @@ def route_view(request):
     except RouteServiceError:
         return JsonResponse({"error": "Routing service unavailable."}, status=502)
 
-    # 3. Pure in-memory computation against our own data.
+    # 3. Pure in-memory computation against our own data -- always on the FULL
+    # geometry, so the result is independent of the display fidelity below.
     candidates = geo.stations_along_route(coords, distance_mi)
     try:
         total, stops = plan_fuel(candidates, distance_mi)
@@ -75,15 +93,22 @@ def route_view(request):
             status=422,
         )
 
+    # 4. Geometry for the RESPONSE only. Default: thinned for a small payload;
+    # ?geometry=full returns every vertex. Neither affects the computed answer.
+    want_full = request.GET.get("geometry") == "full"
+    route_coords = coords if want_full else _downsample_for_display(coords)
+
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     return JsonResponse(
         {
-            "route": {"type": "LineString", "coordinates": coords},
+            "route": {"type": "LineString", "coordinates": route_coords},
             "distance_miles": round(distance_mi, 1),
             "total_fuel_cost_usd": total,
             "fuel_stops": [_serialize_stop(s) for s in stops],
             "meta": {
                 "stations_considered": len(candidates),
+                "route_points": len(route_coords),
+                "geometry": "full" if want_full else "simplified",
                 "corridor_miles": settings.CORRIDOR_MILES,
                 "vehicle_range_miles": settings.VEHICLE_RANGE_MILES,
                 "vehicle_mpg": settings.VEHICLE_MPG,
@@ -117,6 +142,7 @@ def _api_spec():
                 "query_params": {
                     "start": "Required. 'lat,lng' or a place name (e.g. 'Dallas, TX').",
                     "finish": "Required. 'lat,lng' or a place name.",
+                    "geometry": "Optional. 'simplified' (default, small payload) or 'full'.",
                 },
                 "returns": "route GeoJSON, ordered fuel_stops, total_fuel_cost_usd, meta",
                 "status_codes": {

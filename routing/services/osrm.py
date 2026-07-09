@@ -28,8 +28,13 @@ class RouteServiceError(Exception):
 def get_route(start, finish):
     """Return (coords, distance_miles) for start/finish, each (lat, lng).
 
-    ``coords`` is the polyline as a list of [lon, lat] pairs (GeoJSON order).
-    ``distance_miles`` is OSRM's authoritative total distance.
+    ``coords`` is the FULL polyline as a list of [lon, lat] pairs (GeoJSON
+    order); ``distance_miles`` is OSRM's authoritative total distance.
+
+    We always fetch full geometry so corridor matching is accurate and the fuel
+    result is stable. Trimming the geometry for a smaller client payload is a
+    separate, display-only concern handled in the view -- it must never change
+    the computed answer.
     """
     (slat, slng), (flat, flng) = start, finish
     # Round to ~11 m so trivially-different demo requests share a cache entry.
