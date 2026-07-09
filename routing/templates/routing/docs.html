@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ spec.name }} — Docs</title>
+  <style>
+    :root {
+      --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --line: #e2e2e2;
+      --card: #f7f7f8; --accent: #2f6feb; --code: #f0f0f2; --get: #1a7f37;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
+        --card: #161b22; --accent: #4493f8; --code: #161b22; --get: #3fb950;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg);
+           font: 15px/1.6 system-ui, -apple-system, sans-serif; }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
+    h1 { margin: 0 0 4px; font-size: 28px; }
+    h2 { margin: 40px 0 12px; font-size: 20px; border-bottom: 1px solid var(--line);
+         padding-bottom: 6px; }
+    h3 { margin: 24px 0 8px; font-size: 16px; }
+    p.lead { color: var(--muted); font-size: 17px; margin-top: 0; }
+    a { color: var(--accent); }
+    code { background: var(--code); padding: 2px 6px; border-radius: 4px;
+           font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+    pre { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 14px 16px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+             vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 13px;
+         text-transform: uppercase; letter-spacing: .03em; }
+    .method { display: inline-block; background: var(--get); color: #fff; font-weight: 700;
+              font-size: 12px; padding: 2px 8px; border-radius: 4px; margin-right: 8px;
+              font-family: ui-monospace, monospace; }
+    .endpoint { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+                padding: 16px 18px; margin: 12px 0; }
+    .path { font: 15px ui-monospace, monospace; font-weight: 600; }
+    .status { display: grid; grid-template-columns: 60px 1fr; gap: 4px 12px; }
+    .status code { justify-self: start; }
+    .badges { margin: 16px 0 8px; }
+    .badges a { display: inline-block; margin-right: 10px; }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>{{ spec.name }}</h1>
+    <p class="lead">{{ spec.description }}</p>
+
+    <div class="badges">
+      <a href="/map/">Interactive map demo →</a>
+      <a href="/api/">JSON spec →</a>
+    </div>
+
+    <h2>Endpoints</h2>
+    {% for path, info in spec.endpoints.items %}
+      <div class="endpoint">
+        <div><span class="method">GET</span><span class="path">{{ path|cut:"GET " }}</span></div>
+        <div class="muted" style="margin-top:6px">{{ info.summary }}</div>
+        {% if info.query_params %}
+          <h3>Query parameters</h3>
+          <table>
+            <tr><th>Name</th><th>Description</th></tr>
+            {% for name, desc in info.query_params.items %}
+              <tr><td><code>{{ name }}</code></td><td>{{ desc }}</td></tr>
+            {% endfor %}
+          </table>
+        {% endif %}
+        {% if info.returns %}
+          <h3>Returns</h3><p class="muted">{{ info.returns }}</p>
+        {% endif %}
+        {% if info.status_codes %}
+          <h3>Status codes</h3>
+          <div class="status">
+            {% for code, meaning in info.status_codes.items %}
+              <code>{{ code }}</code><span class="muted">{{ meaning }}</span>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% if info.examples %}
+          <h3>Examples</h3>
+          {% for ex in info.examples %}<pre><code>{{ ex }}</code></pre>{% endfor %}
+        {% endif %}
+      </div>
+    {% endfor %}
+
+    <h2>Response schema</h2>
+    <p class="muted">Successful <code>GET /route/</code> response:</p>
+    <pre><code>{
+  "route": { "type": "LineString", "coordinates": [[lon, lat], ...] },
+  "distance_miles": 2793.7,
+  "total_fuel_cost_usd": 699.15,
+  "fuel_stops": [
+    {
+      "name": "Maverik #674", "city": "North Las Vegas", "state": "NV",
+      "lat": 36.19881, "lng": -115.12281,
+      "price_per_gallon": 3.282, "gallons": 26.09,
+      "cost_usd": 85.64, "mile_marker": 260.9
+    }
+  ],
+  "meta": {
+    "stations_considered": 365, "corridor_miles": 5.0,
+    "vehicle_range_miles": 500.0, "vehicle_mpg": 10.0, "elapsed_ms": 374.0
+  }
+}</code></pre>
+
+    <h2>Vehicle model</h2>
+    <table>
+      <tr><th>Property</th><th>Value</th></tr>
+      <tr><td>Range on a full tank</td><td>{{ spec.vehicle_model.range_miles }} miles</td></tr>
+      <tr><td>Fuel efficiency</td><td>{{ spec.vehicle_model.mpg }} mpg</td></tr>
+      <tr><td>Tank capacity</td><td>{{ spec.vehicle_model.tank_gallons }} gallons</td></tr>
+      <tr><td>Corridor width</td><td>{{ spec.vehicle_model.corridor_miles }} miles</td></tr>
+      <tr><td>Assumption</td><td>{{ spec.vehicle_model.assumption }}</td></tr>
+    </table>
+
+    <h2>How it works</h2>
+    <p class="muted">
+      Stations are geocoded once at import from an offline dataset, so the request
+      path makes exactly one external call (to OSRM for the route). Corridor
+      matching and the fuel optimization are pure in-memory computation. The fuel
+      choice is the classic gas-station problem: buy just enough to reach the next
+      cheaper station in range, otherwise fill up and run to the cheapest reachable
+      one — total gallons is fixed by distance, so only <em>where</em> you buy is
+      optimized.
+    </p>
+
+    <p class="muted" style="margin-top:40px; font-size:13px">
+      Try it: <code>curl "http://127.0.0.1:8000/route/?start=Dallas,%20TX&finish=Chicago,%20IL"</code>
+    </p>
+  </div>
+</body>
+</html>
