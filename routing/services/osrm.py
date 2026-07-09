@@ -38,24 +38,45 @@ def get_route(start, finish):
     )
 
 
+# OSRM status codes that mean "the request was understood but no route exists"
+# (a client-side / geography problem, not a service outage). These map to 422.
+_NO_ROUTE_CODES = {"NoRoute", "NoSegment", "NoTrips"}
+
+
 @lru_cache(maxsize=256)
 def _get_route_cached(slat, slng, flat, flng):
     url = f"{settings.OSRM_BASE_URL}/{slng},{slat};{flng},{flat}"  # lon,lat order
+    # Note: OSRM returns HTTP 400 (not 200) for an unroutable pair, with a JSON
+    # body like {"code": "NoRoute"}. So we do NOT raise_for_status blindly --
+    # we parse the body and branch on OSRM's own status code, to tell "no route"
+    # (422) apart from a genuine service failure (502).
     try:
         resp = requests.get(
             url,
             params={"overview": "full", "geometries": "geojson"},
             timeout=settings.EXTERNAL_HTTP_TIMEOUT,
         )
-        resp.raise_for_status()
-        data = resp.json()
     except requests.RequestException as exc:
         raise RouteServiceError(str(exc)) from exc
 
-    if data.get("code") != "Ok" or not data.get("routes"):
-        raise RouteError("No route found between the given locations.")
+    try:
+        data = resp.json()
+    except ValueError as exc:  # 5xx / HTML error page, not JSON
+        raise RouteServiceError(
+            f"Routing service returned non-JSON (HTTP {resp.status_code})."
+        ) from exc
 
-    route = data["routes"][0]
-    coords = route["geometry"]["coordinates"]      # [[lon, lat], ...]
-    distance_miles = route["distance"] * M_TO_MI   # OSRM returns meters
-    return coords, distance_miles
+    code = data.get("code")
+    if code == "Ok" and data.get("routes"):
+        route = data["routes"][0]
+        coords = route["geometry"]["coordinates"]      # [[lon, lat], ...]
+        distance_miles = route["distance"] * M_TO_MI   # OSRM returns meters
+        return coords, distance_miles
+
+    if code in _NO_ROUTE_CODES:
+        raise RouteError(
+            data.get("message", "No route found between the given locations.")
+        )
+
+    # Anything else (server error, unexpected code) is a service-side problem.
+    raise RouteServiceError(f"Routing service error (code={code!r}).")
