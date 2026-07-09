@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fuel Route</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin="anonymous" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.4 system-ui, sans-serif; }
+    #bar { padding: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+           background: #111; color: #eee; }
+    #bar input { padding: 6px 8px; border: 1px solid #444; border-radius: 4px;
+                 background: #1c1c1c; color: #eee; }
+    #bar input#start, #bar input#finish { width: 200px; }
+    #bar button { padding: 6px 14px; border: 0; border-radius: 4px; background: #2f81f7;
+                  color: #fff; cursor: pointer; }
+    #bar button:disabled { opacity: .5; cursor: default; }
+    #summary { margin-left: auto; }
+    #map { height: calc(100vh - 52px); width: 100%; }
+    .err { color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <input id="start" value="Los Angeles, CA" placeholder="start (place or lat,lng)" />
+    <input id="finish" value="New York, NY" placeholder="finish (place or lat,lng)" />
+    <button id="go">Route</button>
+    <span id="summary"></span>
+  </div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin="anonymous"></script>
+  <script>
+    const map = L.map("map").setView([39.5, -98.35], 4);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors", maxZoom: 19,
+    }).addTo(map);
+
+    let layer = L.layerGroup().addTo(map);
+    const summary = document.getElementById("summary");
+    const btn = document.getElementById("go");
+
+    async function run() {
+      layer.clearLayers();
+      summary.textContent = "Routing…";
+      btn.disabled = true;
+      const start = document.getElementById("start").value;
+      const finish = document.getElementById("finish").value;
+      try {
+        const url = `/route/?start=${encodeURIComponent(start)}&finish=${encodeURIComponent(finish)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok) {
+          summary.innerHTML = `<span class="err">${data.error || "Request failed"}</span>`;
+          return;
+        }
+        // LineString is [lon,lat]; Leaflet wants [lat,lon].
+        const line = data.route.coordinates.map(c => [c[1], c[0]]);
+        const poly = L.polyline(line, { color: "#2f81f7", weight: 4 }).addTo(layer);
+        data.fuel_stops.forEach((s, i) => {
+          L.circleMarker([s.lat, s.lng], {
+            radius: 6, color: "#fff", weight: 1, fillColor: "#f0a500", fillOpacity: 1,
+          }).addTo(layer).bindPopup(
+            `<b>#${i + 1} ${s.name}</b><br>${s.city}, ${s.state}` +
+            `<br>$${s.price_per_gallon.toFixed(3)}/gal · ${s.gallons} gal` +
+            `<br>$${s.cost_usd.toFixed(2)} · mile ${s.mile_marker}`
+          );
+        });
+        map.fitBounds(poly.getBounds(), { padding: [30, 30] });
+        summary.textContent =
+          `${data.distance_miles} mi · ${data.fuel_stops.length} stops · ` +
+          `$${data.total_fuel_cost_usd.toFixed(2)} · ${data.meta.elapsed_ms} ms`;
+      } catch (e) {
+        summary.innerHTML = `<span class="err">${e}</span>`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", run);
+    run();
+  </script>
+</body>
+</html>
