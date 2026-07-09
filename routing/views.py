@@ -96,3 +96,59 @@ def route_view(request):
 def map_view(request):
     """Serve the Leaflet demo page that fetches /route and draws it."""
     return render(request, "routing/map.html")
+
+
+def _api_spec():
+    """Machine-readable description of the API, built from live settings.
+
+    Kept as a plain dict so both the JSON endpoint and the HTML docs page render
+    from one source of truth -- the documented params/limits can't drift from
+    the actual configured values.
+    """
+    return {
+        "name": "Fuel Route API",
+        "description": (
+            "Given a start and finish in the USA, returns the driving route, "
+            "the cost-optimal fuel stops along it, and the total fuel cost."
+        ),
+        "endpoints": {
+            "GET /route/": {
+                "summary": "Plan a fuelling route.",
+                "query_params": {
+                    "start": "Required. 'lat,lng' or a place name (e.g. 'Dallas, TX').",
+                    "finish": "Required. 'lat,lng' or a place name.",
+                },
+                "returns": "route GeoJSON, ordered fuel_stops, total_fuel_cost_usd, meta",
+                "status_codes": {
+                    "200": "route found",
+                    "400": "start/finish missing or unresolvable",
+                    "422": "no drivable route, or infeasible for the tank range",
+                    "502": "routing service (OSRM) unreachable",
+                },
+                "examples": [
+                    "/route/?start=Los Angeles, CA&finish=New York, NY",
+                    "/route/?start=34.05,-118.24&finish=40.71,-74.01",
+                ],
+            },
+            "GET /map/": {"summary": "Interactive Leaflet demo page."},
+            "GET /api/": {"summary": "This machine-readable API spec (JSON)."},
+            "GET /": {"summary": "Human-readable API documentation (HTML)."},
+        },
+        "vehicle_model": {
+            "range_miles": settings.VEHICLE_RANGE_MILES,
+            "mpg": settings.VEHICLE_MPG,
+            "tank_gallons": settings.VEHICLE_RANGE_MILES / settings.VEHICLE_MPG,
+            "corridor_miles": settings.CORRIDOR_MILES,
+            "assumption": "Leaves origin with a full tank; cost is fuel purchased to finish.",
+        },
+    }
+
+
+def api_spec_view(request):
+    """Return the API spec as JSON (for tooling / programmatic discovery)."""
+    return JsonResponse(_api_spec())
+
+
+def docs_view(request):
+    """Render the human-readable API documentation page."""
+    return render(request, "routing/docs.html", {"spec": _api_spec()})
