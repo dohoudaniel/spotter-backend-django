@@ -1,0 +1,15 @@
+.gstack
+.venv/
+__pycache__/
+*/__pycache__/
+*.py[cod]
+
+# Django
+db.sqlite3
+*.log
+.env
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
