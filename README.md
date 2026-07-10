@@ -9,7 +9,7 @@ GET /route/?start=<place|lat,lng>&finish=<place|lat,lng>
 ```
 
 Built for the Spotter Backend Django Engineer assessment. Django 6.0.7, Python
-3.12+, SQLite. Dependencies: `django`, `numpy`, `requests`.
+3.12+, SQLite. Dependencies: `django`, `numpy`, `requests`, `scipy`.
 
 ---
 
@@ -81,6 +81,13 @@ Smoke-test the live API (start `runserver` first, then in another terminal):
 It exercises success, single-tank, no-route (422), and bad-input (400) cases and
 exits non-zero on any failure.
 
+More guides in [`docs/`](docs/):
+
+- [`docs/POSTMAN_GUIDE.md`](docs/POSTMAN_GUIDE.md) — step-by-step Postman setup,
+  every request, and Collection Runner tests.
+- [`docs/LOOM_SCRIPT.md`](docs/LOOM_SCRIPT.md) — a < 5-minute demo narration
+  script plus a reviewer-question cheat sheet.
+
 ---
 
 ## Assumptions (decided and documented, per the deadline)
@@ -119,7 +126,7 @@ Request time (GET /route/):
   1. resolve start & finish → coords        (offline city table, else Nominatim)
   2. ONE OSRM call → polyline + total distance   ← the only external call
   3. in memory, own DB/NumPy:
-       a. bbox + corridor filter of stations near the polyline
+       a. KD-tree + corridor filter of stations near the polyline
        b. project each onto the route → mile marker
        c. greedy gas-station optimizer over the ordered list
   4. return route GeoJSON + ordered fuel stops + total cost
@@ -175,18 +182,36 @@ polyline points, 363 stations in the corridor):
 
 | Stage                          | Time      |
 |--------------------------------|-----------|
-| OSRM call (cold)               | ~1.2 s    |
 | OSRM call (cached)             | ~0 ms     |
-| Corridor filter + projection   | ~0.35 s   |
+| Corridor filter + projection   | ~0.13 s   |
 | Fuel optimizer                 | < 1 ms    |
-| **Total request (cold / warm)**| ~1.8 s / ~0.4 s |
+| Serialize + respond            | ~0.04 s   |
+| **Total request (warm)**       | **~0.13 s** |
 
-The request path touches the DB **once** — stations load into module-level NumPy
-arrays on first use and are reused across requests. There is exactly one
-external call per uncached request. `overview=full` returns tens of thousands of
-polyline points; the corridor match downsamples to ≤ 2,000 vertices (accuracy
-stays well inside the 5-mile corridor) so runtime doesn't scale with route
-length. Identical requests are `lru_cache`d.
+Cold requests are dominated entirely by the single live OSRM call to the public
+demo server (~1–10 s, network-bound and outside our control — self-hosting OSRM
+removes it). Everything we own is well under 200 ms.
+
+What keeps it fast:
+
+- **One external call per uncached request** to OSRM; identical requests are
+  `lru_cache`d. Endpoint geocoding hits a bundled offline table first.
+- **The DB is touched once.** Stations load into module-level NumPy arrays on
+  first use and are reused across requests.
+- **Caches are warmed at startup** in a background thread ([routing/apps.py]),
+  so the first request never pays the one-time station / city-table load.
+- **KD-tree corridor prefilter.** A `scipy.spatial.cKDTree` over the route
+  vertices narrows ~6,600 stations to a few hundred candidates before the exact
+  point-to-segment test — an axis-aligned bounding box is useless on a long
+  diagonal route (its envelope covers half the map). ~5× faster than the naive
+  scan (≈590 ms → ≈130 ms).
+- **Downsampled matching.** `overview=full` returns tens of thousands of
+  vertices; the corridor match uses ≤ 2,000 (accuracy stays well inside the
+  5-mile corridor), so runtime doesn't scale with route length.
+- **HTTP keep-alive.** A reused `requests.Session` skips the TCP + TLS handshake
+  on repeat OSRM/Nominatim calls.
+- **Small response by default.** Returned geometry is thinned to ~600 points
+  (~18 KB); `?geometry=full` opts into the complete polyline.
 
 ---
 
@@ -206,11 +231,17 @@ length. Identical requests are `lru_cache`d.
     }
   ],
   "meta": {
-    "stations_considered": 365, "corridor_miles": 5.0,
-    "vehicle_range_miles": 500.0, "vehicle_mpg": 10.0, "elapsed_ms": 374.0
+    "stations_considered": 365, "route_points": 600, "geometry": "simplified",
+    "corridor_miles": 5.0, "vehicle_range_miles": 500.0, "vehicle_mpg": 10.0,
+    "elapsed_ms": 374.0
   }
 }
 ```
+
+By default the returned `route.coordinates` is thinned to ~600 points (~18 KB)
+for a small payload; add `&geometry=full` for the complete polyline. This is
+display-only — the fuel plan is always computed on the full geometry, so the
+result is identical either way.
 
 Error responses: `400` (bad start/finish), `422` (no route, or infeasible for
 the 500-mile range), `502` (routing service unavailable).

@@ -21,6 +21,10 @@ from django.conf import settings
 from routing.services import cities
 
 
+# Reused Session for keep-alive on the (rare) Nominatim fallback calls.
+_SESSION = requests.Session()
+
+
 class ResolveError(Exception):
     """The start/finish value could not be turned into coordinates."""
 
@@ -58,7 +62,7 @@ def resolve(value: str):
 @lru_cache(maxsize=256)
 def _nominatim(query: str):
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             settings.NOMINATIM_URL,
             params={"q": query, "format": "json", "limit": 1, "countrycodes": "us,ca"},
             headers={"User-Agent": settings.GEOCODER_USER_AGENT},

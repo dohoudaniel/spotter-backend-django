@@ -2,9 +2,10 @@
 
 Given the OSRM polyline, find the stations within ``CORRIDOR_MILES`` of it and
 compute each one's distance-along-route ("mile marker") so the optimizer can
-order them and measure leg gaps. This is pure in-memory computation over a few
-thousand stations and a few hundred segments -> a few million float ops,
-sub-millisecond. No PostGIS, no per-request DB spatial query.
+order them and measure leg gaps. A KD-tree over the route vertices narrows the
+~6,600 stations to a small candidate set in O(log n) per station; the exact
+point-to-segment test then runs only on those. All in memory -- no PostGIS, no
+per-request DB spatial query.
 
 All stations load into module-level arrays once (``_STATIONS``) and are reused
 across requests, so the request path never queries the DB per call.
@@ -12,6 +13,7 @@ across requests, so the request path never queries the DB per call.
 
 import numpy as np
 from django.conf import settings
+from scipy.spatial import cKDTree
 
 from routing.models import FuelStation
 
@@ -95,53 +97,53 @@ def stations_along_route(coords, total_distance_mi, corridor_mi=None):
     if S["lat"].size == 0:
         return []
 
-    # Bounding-box prefilter: pad the route envelope by the corridor width
-    # (deg latitude ~ 69 mi) and drop everything outside it instantly.
-    pad = corridor_mi / 69.0
-    m = (
-        (S["lat"] >= plat.min() - pad)
-        & (S["lat"] <= plat.max() + pad)
-        & (S["lng"] >= plng.min() - pad)
-        & (S["lng"] <= plng.max() + pad)
-    )
-    idx = np.where(m)[0]
-    if idx.size == 0:
-        return []
+    # Project all stations into the same planar frame as the route.
+    sxa, sya = _to_xy(S["lat"], S["lng"], lat0, lng0)
 
-    sx, sy = _to_xy(S["lat"][idx], S["lng"][idx], lat0, lng0)
-
-    # Point-to-segment distance from every candidate to the closest segment,
-    # plus the along-route mileage at that projection point.
+    # Spatial prefilter with a KD-tree over the route vertices. An axis-aligned
+    # bounding box is nearly useless for a long diagonal route (its envelope
+    # covers half the map), so most stations would survive it. The KD-tree
+    # instead finds each station's nearest route vertex in O(log n) and lets us
+    # keep only those that could possibly be within the corridor.
     #
-    # We loop over CANDIDATES (a few hundred) and vectorize across all segments
-    # at once. With overview=full the polyline can have tens of thousands of
-    # segments, so looping segments in Python would be the bottleneck; looping
-    # the smaller dimension keeps this in the millisecond range.
-    ax, ay = px[:-1], py[:-1]  # segment starts
-    abx, aby = np.diff(px), np.diff(py)
+    # Threshold: a station within `corridor_mi` of a segment's interior can be
+    # up to one segment-length farther from the nearest vertex, so we pad by the
+    # longest segment. This is a superset; the exact test below trims it.
+    ax, ay = px[:-1], py[:-1]              # segment starts
+    abx, aby = np.diff(px), np.diff(py)    # segment vectors
     l2 = abx * abx + aby * aby
     safe_l2 = np.where(l2 == 0.0, 1.0, l2)  # avoid /0 on zero-length segments
 
-    best_d = np.empty(idx.size)
-    best_mile = np.empty(idx.size)
-    for i in range(idx.size):
-        t = np.clip(((sx[i] - ax) * abx + (sy[i] - ay) * aby) / safe_l2, 0.0, 1.0)
-        dx = sx[i] - (ax + t * abx)
-        dy = sy[i] - (ay + t * aby)
-        d = np.hypot(dx, dy)
-        d[l2 == 0.0] = np.inf  # ignore degenerate segments
-        k = int(np.argmin(d))
-        best_d[i] = d[k]
-        best_mile[i] = cum[k] + t[k] * seg_len[k]
+    tree = cKDTree(np.column_stack([px, py]))
+    vert_dist, _ = tree.query(np.column_stack([sxa, sya]))
+    prefilter = corridor_mi + (seg_len.max() if seg_len.size else 0.0)
+    cand = np.where(vert_dist <= prefilter)[0]
+    if cand.size == 0:
+        return []
+
+    # Exact point-to-segment distance for the narrowed candidate set against
+    # every segment (small matrix now), tracking the closest segment and the
+    # along-route mileage at the projection point.
+    cx, cy = sxa[cand], sya[cand]
+    dx0 = cx[:, None] - ax[None, :]        # (ncand, nseg)
+    dy0 = cy[:, None] - ay[None, :]
+    t = np.clip((dx0 * abx + dy0 * aby) / safe_l2, 0.0, 1.0)
+    dist = np.hypot(dx0 - t * abx, dy0 - t * aby)
+    dist[:, l2 == 0.0] = np.inf            # ignore degenerate segments
+
+    nearest = np.argmin(dist, axis=1)      # closest segment per candidate
+    rows = np.arange(cand.size)
+    best_d = dist[rows, nearest]
+    best_mile = cum[nearest] + t[rows, nearest] * seg_len[nearest]
 
     keep = np.where(best_d <= corridor_mi)[0]
     out = [
         {
             "mile": float(best_mile[j]),
-            "price": float(S["price"][idx[j]]),
-            "lat": float(S["lat"][idx[j]]),
-            "lng": float(S["lng"][idx[j]]),
-            **S["meta"][idx[j]],
+            "price": float(S["price"][cand[j]]),
+            "lat": float(S["lat"][cand[j]]),
+            "lng": float(S["lng"][cand[j]]),
+            **S["meta"][cand[j]],
         }
         for j in keep
     ]

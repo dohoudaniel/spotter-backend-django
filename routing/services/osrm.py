@@ -16,6 +16,10 @@ from django.conf import settings
 
 M_TO_MI = 0.000621371
 
+# One reused Session: connection pooling + HTTP keep-alive, so repeat calls
+# skip the TCP + TLS handshake (~100-300 ms each) to the routing host.
+_SESSION = requests.Session()
+
 
 class RouteError(Exception):
     """OSRM could not return a route (no path, bad input)."""
@@ -56,7 +60,7 @@ def _get_route_cached(slat, slng, flat, flng):
     # we parse the body and branch on OSRM's own status code, to tell "no route"
     # (422) apart from a genuine service failure (502).
     try:
-        resp = requests.get(
+        resp = _SESSION.get(
             url,
             params={"overview": "full", "geometries": "geojson"},
             timeout=settings.EXTERNAL_HTTP_TIMEOUT,
